@@ -55,7 +55,7 @@ def download_modis_fire_and_imagery(bbox, start_date, end_date, product_fire, pr
 
     coll_fire = colls_fire[0]
     coll_img = colls_img[0]
-    # Print collection metadata
+   
     print("Fire collection:", coll_fire)
     print("Imagery collection:", coll_img)
     q_test = DataGranules(auth).concept_id(coll_fire.concept_id()).temporal("2020-08-01", "2020-08-10")
@@ -181,7 +181,7 @@ class FireUNet(nn.Module):
             x = torch.cat((skip, x), dim=1)
             x = up(x)
         return torch.sigmoid(self.final_conv(x))
-    # 🔽 Add this utility function here
+    # Add this utility function here
 def read_hdf_as_array(hdf_path, subdataset_index=0):
     import rasterio
     with rasterio.open(hdf_path) as src:
@@ -324,5 +324,6 @@ if __name__ == "__main__":
     image_paths = sorted(glob.glob(os.path.join(image_dir, "*.hdf")))
     label_paths = sorted(glob.glob(os.path.join(image_dir, "*.hdf")))
     train(image_paths, label_paths)
+
 
     
