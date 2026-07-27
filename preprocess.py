@@ -2,22 +2,23 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Tuple
 
 import numpy as np
 import rasterio
+
 from rasterio.features import rasterize
 from rasterio.transform import from_origin
+
 import geopandas as gpd
 
 
 from config import (
     RAW_DIR,
     PROCESSED_DIR,
-    TRAINING,
     MODIS_IMAGE_PRODUCT,
     MODIS_FIRE_PRODUCT,
 )
+
 
 
 logging.basicConfig(
@@ -26,6 +27,7 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger("Preprocess")
+
 
 
 class PreprocessError(Exception):
@@ -42,17 +44,12 @@ class MODISPreprocessor:
         output_dir: Path = PROCESSED_DIR,
     ):
 
-        self.raw_dir = Path(raw_dir)
-        self.output_dir = Path(output_dir)
-
-        self.image_dir = (
-            self.raw_dir /
-            MODIS_IMAGE_PRODUCT
+        self.raw_dir = Path(
+            raw_dir
         )
 
-        self.fire_dir = (
-            self.raw_dir /
-            MODIS_FIRE_PRODUCT
+        self.output_dir = Path(
+            output_dir
         )
 
         self.output_dir.mkdir(
@@ -61,355 +58,271 @@ class MODISPreprocessor:
         )
 
 
-    def list_files(
+
+    def find_files(
         self,
         directory: Path,
         extension=".hdf"
     ):
 
-        if not directory.exists():
 
-            return []
-
-        return sorted(
+        files = sorted(
             directory.rglob(
                 f"*{extension}"
             )
         )
 
 
-
-    def read_hdf(
-        self,
-        file_path: Path
-    ) -> np.ndarray:
-
-        try:
-
-            with rasterio.open(
-                file_path
-            ) as src:
-
-                if not src.subdatasets:
-
-                    data = src.read()
-
-                else:
-
-                    with rasterio.open(
-                        src.subdatasets[0]
-                    ) as sub:
-
-                        data = sub.read()
-
-
-            return data.astype(
-                np.float32
-            )
-
-
-        except Exception as exc:
+        if not files:
 
             raise PreprocessError(
-                f"Cannot read {file_path}: {exc}"
+                f"No files found in {directory}"
             )
+
+
+        return files
+
+
+
+    def read_raster(
+        self,
+        path: Path
+    ):
+
+
+        with rasterio.open(
+            path
+        ) as src:
+
+            array = src.read()
+
+            profile = src.profile
+
+
+        return (
+            array,
+            profile
+        )
 
 
 
     def normalize(
         self,
-        image: np.ndarray
-    ) -> np.ndarray:
+        image
+    ):
 
 
-        minimum = np.nanmin(
-            image
-        )
-
-        maximum = np.nanmax(
-            image
-        )
-
-
-        if maximum == minimum:
-
-            return np.zeros_like(
-                image
-            )
-
-
-        image = (
-            image - minimum
-        ) / (
-            maximum - minimum
-        )
-
-
-        image = np.nan_to_num(
+        output = np.zeros_like(
             image,
-            nan=0.0
+            dtype=np.float32
         )
 
 
-        return image
+        for i in range(
+            image.shape[0]
+        ):
 
 
-
-    def create_empty_mask(
-        self,
-        shape: Tuple[int,int]
-    ) -> np.ndarray:
+            band = image[i]
 
 
-        return np.zeros(
-            shape,
-            dtype=np.uint8
-        )
-
-
-
-    def read_fire_mask(
-        self,
-        file_path: Path,
-        shape: Tuple[int,int]
-    ) -> np.ndarray:
-
-
-        fire = self.read_hdf(
-            file_path
-        )
-
-
-        fire = np.squeeze(
-            fire
-        )
-
-
-        if fire.shape != shape:
-
-            fire = np.resize(
-                fire,
-                shape
+            minimum = np.nanmin(
+                band
             )
 
 
-        mask = np.zeros_like(
-            fire,
-            dtype=np.uint8
+            maximum = np.nanmax(
+                band
+            )
+
+
+            if maximum == minimum:
+
+                output[i] = 0
+
+            else:
+
+                output[i] = (
+                    band - minimum
+                ) / (
+                    maximum - minimum
+                )
+
+
+        return output
+
+
+
+    def create_mask(
+        self,
+        fire_file: Path,
+        shape,
+        transform=None
+    ):
+
+
+        with rasterio.open(
+            fire_file
+        ) as src:
+
+            fire = src.read(
+                1
+            )
+
+            profile = src.profile
+
+
+
+        mask = np.where(
+            fire > 0,
+            1,
+            0
+        ).astype(
+            np.float32
         )
 
 
-        mask[
-            fire > 7
-        ] = 1
+        if mask.shape != shape:
+
+            raise PreprocessError(
+                "Image and fire mask dimensions differ"
+            )
 
 
         return mask
 
 
 
-    def crop_patch(
-        self,
-        image: np.ndarray,
-        mask: np.ndarray,
-        size: int = TRAINING.image_size
-    ):
-
-        bands, height, width = image.shape
-
-
-        if height < size or width < size:
-
-            padded_image = np.zeros(
-                (
-                    bands,
-                    max(height,size),
-                    max(width,size)
-                ),
-                dtype=image.dtype
-            )
-
-
-            padded_mask = np.zeros(
-                (
-                    max(height,size),
-                    max(width,size)
-                ),
-                dtype=mask.dtype
-            )
-
-
-            padded_image[
-                :,
-                :height,
-                :width
-            ] = image
-
-
-            padded_mask[
-                :height,
-                :width
-            ] = mask
-
-
-            image = padded_image
-            mask = padded_mask
-
-
-            height = image.shape[1]
-            width = image.shape[2]
-
-
-        y = (
-            height - size
-        ) // 2
-
-        x = (
-            width - size
-        ) // 2
-
-
-        image_patch = (
-            image[
-                :,
-                y:y+size,
-                x:x+size
-            ]
-        )
-
-
-        mask_patch = (
-            mask[
-                y:y+size,
-                x:x+size
-            ]
-        )
-
-
-        return (
-            image_patch,
-            mask_patch
-        )
-
-
-
-    def process_pair(
-        self,
-        image_file: Path,
-        fire_file: Path,
-    ):
-
-        image = self.read_hdf(
-            image_file
-        )
-
-
-        image = self.normalize(
-            image
-        )
-
-
-        mask = self.read_fire_mask(
-            fire_file,
-            (
-                image.shape[1],
-                image.shape[2]
-            )
-        )
-
-
-        image, mask = self.crop_patch(
-            image,
-            mask
-        )
-
-
-        return image, mask
-
-
-
     def save_pair(
         self,
-        image: np.ndarray,
-        mask: np.ndarray,
-        name: str
+        image,
+        mask,
+        index
     ):
 
 
-        np.save(
+        image_path = (
             self.output_dir /
-            f"{name}_image.npy",
+            f"sample_{index:05d}_image.npy"
+        )
+
+
+        mask_path = (
+            self.output_dir /
+            f"sample_{index:05d}_mask.npy"
+        )
+
+
+        np.save(
+            image_path,
             image
         )
 
 
         np.save(
-            self.output_dir /
-            f"{name}_mask.npy",
+            mask_path,
             mask
         )
 
 
-
-    def run(self):
-
-
-        images = self.list_files(
-            self.image_dir
+        logger.info(
+            f"Saved sample {index}"
         )
 
 
-        fires = self.list_files(
-            self.fire_dir
+
+    def process(
+        self
+    ):
+
+
+        image_dir = (
+            self.raw_dir /
+            MODIS_IMAGE_PRODUCT
         )
 
 
-        if not images:
+        fire_dir = (
+            self.raw_dir /
+            MODIS_FIRE_PRODUCT
+        )
 
-            raise PreprocessError(
-                "No MOD09GA files found"
+
+        images = self.find_files(
+            image_dir
+        )
+
+
+        fires = self.find_files(
+            fire_dir
+        )
+
+
+        if len(images) != len(fires):
+
+            logger.warning(
+                "Different number of images and masks"
             )
 
 
-        if not fires:
-
-            raise PreprocessError(
-                "No MOD14A1 files found"
-            )
-
-
-        count = min(
+        total = min(
             len(images),
             len(fires)
         )
 
 
-        for index in range(count):
+        for i in range(
+            total
+        ):
 
-            image, mask = self.process_pair(
-                images[index],
-                fires[index]
+
+            logger.info(
+                f"Processing {i+1}/{total}"
+            )
+
+
+            image, profile = self.read_raster(
+                images[i]
+            )
+
+
+            image = image.astype(
+                np.float32
+            )
+
+
+            image = self.normalize(
+                image
+            )
+
+
+            mask = self.create_mask(
+                fires[i],
+                image.shape[1:]
             )
 
 
             self.save_pair(
                 image,
                 mask,
-                f"sample_{index:05d}"
+                i
             )
 
 
-            logger.info(
-                f"Processed sample {index}"
-            )
+        logger.info(
+            "Preprocessing completed"
+        )
 
 
 
 def main():
 
+
     processor = MODISPreprocessor()
 
-    processor.run()
+
+    processor.process()
+
 
 
 if __name__ == "__main__":
