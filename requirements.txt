@@ -1,0 +1,14 @@
+earthaccess
+numpy
+rasterio
+geopandas
+shapely
+torch
+torchvision
+matplotlib
+h5py
+tqdm
+scikit-learn
+pandas
+requests
+pyyaml
