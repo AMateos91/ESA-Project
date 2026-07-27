@@ -26,6 +26,7 @@ PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 MODEL_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+AEMET_API_KEY = "VUESTRA_API_KEY"
 
 # ==========================
 # PRODUCTOS MODIS
