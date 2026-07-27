@@ -1,28 +1,12 @@
-"""
-download.py
-
-Módulo de descarga de productos MODIS mediante Earthaccess.
-
-Productos utilizados:
-    - MOD09GA : reflectancia superficial MODIS (entrada del modelo)
-    - MOD14A1 : máscara de incendios MODIS (etiquetas)
-
-Requiere:
-    pip install earthaccess
-
-"""
-
 from __future__ import annotations
 
+import argparse
 import logging
 import sys
 from pathlib import Path
 from typing import Optional
 
-
-import earthaccess
 from earthaccess import Auth, DataCollections, DataGranules, Store
-
 
 from config import (
     RAW_DIR,
@@ -35,78 +19,28 @@ from config import (
 )
 
 
-# ============================================================
-# LOGGING
-# ============================================================
-
-LOG_FORMAT = (
-    "%(asctime)s | "
-    "%(levelname)s | "
-    "%(name)s | "
-    "%(message)s"
-)
-
-
 logging.basicConfig(
     level=logging.INFO,
-    format=LOG_FORMAT,
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
-
 
 logger = logging.getLogger("MODISDownloader")
 
 
-
-# ============================================================
-# EXCEPCIONES PERSONALIZADAS
-# ============================================================
-
 class MODISDownloadError(Exception):
-    """
-    Error general durante la descarga MODIS.
-    """
     pass
-
 
 
 class CollectionNotFoundError(MODISDownloadError):
-    """
-    No se encontró una colección MODIS.
-    """
     pass
-
 
 
 class AuthenticationError(MODISDownloadError):
-    """
-    Fallo de autenticación Earthdata.
-    """
     pass
 
 
-
-# ============================================================
-# CLASE PRINCIPAL
-# ============================================================
-
 class MODISDownloader:
-    """
-    Cliente encargado de descargar productos MODIS.
-
-    Ejemplo:
-
-        downloader = MODISDownloader()
-
-        downloader.download(
-            start_date="2020-08-01",
-            end_date="2020-08-10",
-            bbox=(10,45,15,48)
-        )
-
-    """
 
     def __init__(
         self,
@@ -115,13 +49,8 @@ class MODISDownloader:
     ):
 
         self.output_dir = Path(output_dir)
-
         self.version = version
-
         self.auth: Optional[Auth] = None
-
-
-        # Crear estructura
 
         self.image_dir = (
             self.output_dir /
@@ -132,7 +61,6 @@ class MODISDownloader:
             self.output_dir /
             MODIS_FIRE_PRODUCT
         )
-
 
         self.image_dir.mkdir(
             parents=True,
@@ -145,27 +73,7 @@ class MODISDownloader:
         )
 
 
-        logger.info(
-            "MODISDownloader inicializado"
-        )
-
-
-
-    # ========================================================
-    # AUTENTICACIÓN
-    # ========================================================
-
     def authenticate(self) -> None:
-        """
-        Autentica contra NASA Earthdata.
-
-        Usa el sistema interactivo de Earthaccess.
-        """
-
-        logger.info(
-            "Autenticando con NASA Earthdata..."
-        )
-
 
         try:
 
@@ -174,60 +82,33 @@ class MODISDownloader:
                 persist=True
             )
 
-
         except Exception as exc:
 
             raise AuthenticationError(
-                f"No fue posible autenticar: {exc}"
+                str(exc)
             )
-
 
         if not self.auth.authenticated:
 
             raise AuthenticationError(
-                "Earthdata rechazó la autenticación"
+                "Earthdata authentication failed"
             )
 
-
         logger.info(
-            "Autenticación correcta"
+            "Earthdata authentication successful"
         )
 
-
-
-    # ========================================================
-    # COLECCIONES
-    # ========================================================
 
     def get_collection(
         self,
         short_name: str
     ):
-        """
-        Obtiene una colección MODIS concreta.
-
-        Parameters
-        ----------
-        short_name:
-            Nombre corto del producto.
-
-        Returns
-        -------
-        Collection Earthaccess
-        """
-
 
         if self.auth is None:
 
             raise AuthenticationError(
-                "Debe autenticarse antes"
+                "Authenticate first"
             )
-
-
-        logger.info(
-            f"Buscando colección {short_name}"
-        )
-
 
         collections = (
             DataCollections(self.auth)
@@ -236,106 +117,49 @@ class MODISDownloader:
             .get()
         )
 
-
         if not collections:
 
             raise CollectionNotFoundError(
-                f"No existe {short_name} versión {self.version}"
+                f"{short_name} not found"
             )
 
+        return collections[0]
 
-        collection = collections[0]
-
-
-        logger.info(
-            "Colección encontrada:"
-            f" {collection['umm']['EntryTitle']}"
-        )
-
-
-        return collection
-
-
-
-    # ========================================================
-    # OBTENER CONCEPT ID
-    # ========================================================
 
     def get_concept_id(
         self,
         short_name: str
     ) -> str:
-        """
-        Obtiene el concept-id necesario
-        para consultar granos.
-        """
-
 
         collection = self.get_collection(
             short_name
         )
 
+        return collection["meta"]["concept-id"]
 
-        concept_id = (
-            collection["meta"]["concept-id"]
-        )
-
-
-        logger.info(
-            f"{short_name} concept-id: {concept_id}"
-        )
-
-
-        return concept_id
-        
-    # ========================================================
-    # BÚSQUEDA DE GRANOS
-    # ========================================================
 
     def search_granules(
         self,
-        short_name: str,
+        product: str,
         start_date: str,
         end_date: str,
-        bbox: tuple[float, float, float, float],
+        bbox: tuple[
+            float,
+            float,
+            float,
+            float
+        ],
     ):
-        """
-        Busca archivos MODIS disponibles.
-
-        Parameters
-        ----------
-        short_name:
-            Producto MODIS.
-
-        start_date:
-            Fecha inicial YYYY-MM-DD.
-
-        end_date:
-            Fecha final YYYY-MM-DD.
-
-        bbox:
-            (west, south, east, north)
-
-        Returns
-        -------
-        lista de granulos
-        """
 
         if self.auth is None:
+
             raise AuthenticationError(
-                "Debe autenticarse antes"
+                "Authenticate first"
             )
 
-
         concept_id = self.get_concept_id(
-            short_name
+            product
         )
-
-
-        logger.info(
-            f"Buscando granos para {short_name}"
-        )
-
 
         query = (
             DataGranules(self.auth)
@@ -349,197 +173,105 @@ class MODISDownloader:
             )
         )
 
-
-        hits = query.hits()
-
-
-        logger.info(
-            f"{short_name}: {hits} granos encontrados"
-        )
-
-
-        if hits == 0:
-            logger.warning(
-                f"No hay datos disponibles para {short_name}"
-            )
+        if query.hits() == 0:
 
             return []
 
+        return query.get()
 
-        granules = query.get()
-
-
-        return granules
-
-
-
-    # ========================================================
-    # INFORMACIÓN DE GRÁNULOS
-    # ========================================================
-
-    def print_granule_summary(
-        self,
-        granules,
-        name: str
-    ):
-        """
-        Imprime información básica de los archivos encontrados.
-        """
-
-
-        logger.info(
-            f"Resumen {name}"
-        )
-
-
-        for idx, granule in enumerate(
-            granules
-        ):
-
-            try:
-
-                title = (
-                    granule["umm"]
-                    ["GranuleUR"]
-                )
-
-            except Exception:
-
-                title = "desconocido"
-
-
-            logger.info(
-                f"{idx+1}: {title}"
-            )
-
-
-
-    # ========================================================
-    # DESCARGA
-    # ========================================================
 
     def download_granules(
         self,
         granules,
-        destination: Path
+        destination: Path,
     ):
-        """
-        Descarga una lista de granulos.
-
-        Parameters
-        ----------
-        granules:
-            Resultado de DataGranules.get()
-
-        destination:
-            Carpeta destino.
-        """
-
 
         if not granules:
 
-            logger.warning(
-                "Lista de granos vacía"
-            )
-
             return
-
-
 
         destination.mkdir(
             parents=True,
             exist_ok=True
         )
 
+        store = Store(self.auth)
 
-        logger.info(
-            f"Descargando {len(granules)} archivos"
+        store.get(
+            granules,
+            local_path=str(destination)
         )
 
 
-        store = Store(
-            self.auth
+    def download_with_retry(
+        self,
+        granules,
+        destination: Path,
+        retries: int = 3,
+    ):
+
+        error = None
+
+        for attempt in range(retries):
+
+            try:
+
+                self.download_granules(
+                    granules,
+                    destination
+                )
+
+                return
+
+            except Exception as exc:
+
+                error = exc
+
+                logger.warning(
+                    f"Download attempt {attempt + 1} failed: {exc}"
+                )
+
+        raise MODISDownloadError(
+            f"Download failed: {error}"
         )
 
-
-        try:
-
-            store.get(
-                granules,
-                local_path=str(destination)
-            )
-
-
-        except Exception as exc:
-
-            raise MODISDownloadError(
-                f"Error durante descarga: {exc}"
-            )
-
-
-        logger.info(
-            "Descarga completada"
-        )
-
-
-
-    # ========================================================
-    # DESCARGA DE PRODUCTO COMPLETO
-    # ========================================================
 
     def download_product(
         self,
         product: str,
         start_date: str,
         end_date: str,
-        bbox: tuple[float, float, float, float],
+        bbox: tuple[
+            float,
+            float,
+            float,
+            float
+        ],
         destination: Path,
     ):
-        """
-        Flujo completo:
-
-        1. Buscar granos
-        2. Mostrar información
-        3. Descargar
-        """
-
 
         granules = self.search_granules(
-            short_name=product,
-            start_date=start_date,
-            end_date=end_date,
-            bbox=bbox
+            product,
+            start_date,
+            end_date,
+            bbox
         )
-
 
         if not granules:
 
             logger.warning(
-                f"No se descargará {product}"
+                f"No granules found for {product}"
             )
 
             return []
 
-
-        self.print_granule_summary(
-            granules,
-            product
-        )
-
-
-        self.download_granules(
+        self.download_with_retry(
             granules,
             destination
         )
 
-
         return granules
 
-
-
-    # ========================================================
-    # DESCARGA DEL DATASET COMPLETO
-    # ========================================================
 
     def download_dataset(
         self,
@@ -552,201 +284,53 @@ class MODISDownloader:
             float
         ] = BOUNDING_BOX,
     ):
-        """
-        Descarga todos los productos necesarios
-        para entrenar el detector.
-
-        Descarga:
-
-            MOD09GA -> imágenes
-
-            MOD14A1 -> etiquetas
-        """
-
 
         if self.auth is None:
 
             self.authenticate()
 
 
-
-        logger.info(
-            "Inicio descarga dataset MODIS"
+        images = self.download_product(
+            MODIS_IMAGE_PRODUCT,
+            start_date,
+            end_date,
+            bbox,
+            self.image_dir
         )
 
 
-        image_granules = (
-            self.download_product(
-                product=MODIS_IMAGE_PRODUCT,
-                start_date=start_date,
-                end_date=end_date,
-                bbox=bbox,
-                destination=self.image_dir
-            )
-        )
-
-
-        fire_granules = (
-            self.download_product(
-                product=MODIS_FIRE_PRODUCT,
-                start_date=start_date,
-                end_date=end_date,
-                bbox=bbox,
-                destination=self.fire_dir
-            )
-        )
-
-
-        logger.info(
-            "Proceso de descarga finalizado"
+        fire_masks = self.download_product(
+            MODIS_FIRE_PRODUCT,
+            start_date,
+            end_date,
+            bbox,
+            self.fire_dir
         )
 
 
         return {
-            "images": image_granules,
-            "fire_masks": fire_granules,
+            "images": images,
+            "fire_masks": fire_masks,
         }
-            # ========================================================
-    # CONTROL DE DESCARGAS EXISTENTES
-    # ========================================================
+
 
     def existing_files(
         self,
         directory: Path
     ) -> list[Path]:
-        """
-        Devuelve los archivos ya descargados.
-
-        Sirve para evitar descargar
-        datos repetidos.
-        """
 
         if not directory.exists():
 
             return []
 
-
-        files = [
-            f for f in directory.rglob("*")
-            if f.is_file()
+        return [
+            file
+            for file in directory.rglob("*")
+            if file.is_file()
         ]
 
 
-        return files
-
-
-
-    def check_existing_downloads(
-        self
-    ) -> dict[str, int]:
-        """
-        Resume los archivos existentes.
-        """
-
-        images = self.existing_files(
-            self.image_dir
-        )
-
-        fire = self.existing_files(
-            self.fire_dir
-        )
-
-
-        summary = {
-            "images": len(images),
-            "fire": len(fire)
-        }
-
-
-        logger.info(
-            "Archivos existentes:"
-        )
-
-        logger.info(
-            f"MOD09GA: {summary['images']}"
-        )
-
-        logger.info(
-            f"MOD14A1: {summary['fire']}"
-        )
-
-
-        return summary
-
-
-
-    # ========================================================
-    # DESCARGA CON REINTENTOS
-    # ========================================================
-
-    def download_with_retry(
-        self,
-        granules,
-        destination: Path,
-        retries: int = 3,
-    ):
-        """
-        Descarga con reintentos.
-
-        Evita fallos temporales de red.
-        """
-
-
-        last_error = None
-
-
-        for attempt in range(1, retries + 1):
-
-            logger.info(
-                f"Intento {attempt}/{retries}"
-            )
-
-
-            try:
-
-                self.download_granules(
-                    granules,
-                    destination
-                )
-
-
-                logger.info(
-                    "Descarga correcta"
-                )
-
-
-                return
-
-
-            except Exception as exc:
-
-                last_error = exc
-
-
-                logger.warning(
-                    f"Fallo intento {attempt}: {exc}"
-                )
-
-
-        raise MODISDownloadError(
-            "La descarga falló después de "
-            f"{retries} intentos: {last_error}"
-        )
-
-
-
-    # ========================================================
-    # VALIDACIÓN DEL DATASET
-    # ========================================================
-
-    def validate_dataset(
-        self
-    ) -> bool:
-        """
-        Comprueba que existe información
-        descargada de ambos productos.
-        """
-
+    def validate_dataset(self) -> bool:
 
         images = self.existing_files(
             self.image_dir
@@ -756,163 +340,81 @@ class MODISDownloader:
             self.fire_dir
         )
 
-
-        valid = (
+        return (
             len(images) > 0
             and
             len(masks) > 0
         )
 
 
-        if valid:
-
-            logger.info(
-                "Dataset MODIS válido"
-            )
-
-        else:
-
-            logger.error(
-                "Dataset incompleto"
-            )
-
-
-        return valid
-
-
-
-    # ========================================================
-    # RESUMEN FINAL
-    # ========================================================
-
-    def summary(
-        self
-    ):
-        """
-        Muestra el estado final.
-        """
-
+    def summary(self):
 
         images = self.existing_files(
             self.image_dir
         )
 
-        fire = self.existing_files(
+        masks = self.existing_files(
             self.fire_dir
         )
 
-
-        print("\n")
-        print("=" * 60)
-        print(" RESUMEN DATASET MODIS ")
-        print("=" * 60)
-
-        print(
-            f"Imágenes MOD09GA : {len(images)}"
+        logger.info(
+            f"MOD09GA files: {len(images)}"
         )
 
-        print(
-            f"Máscaras MOD14A1 : {len(fire)}"
+        logger.info(
+            f"MOD14A1 files: {len(masks)}"
         )
 
-        print(
-            f"Directorio datos : {self.output_dir}"
+        logger.info(
+            f"Output: {self.output_dir}"
         )
 
-        print("=" * 60)
-        print("\n")
-
-
-
-# ============================================================
-# INTERFAZ DE COMANDO
-# ============================================================
 
 def parse_arguments():
 
-    import argparse
-
-
-    parser = argparse.ArgumentParser(
-        description=
-        "Descarga productos MODIS para detección de incendios"
-    )
-
+    parser = argparse.ArgumentParser()
 
     parser.add_argument(
         "--start",
-        default=START_DATE,
-        help="Fecha inicial YYYY-MM-DD"
+        default=START_DATE
     )
-
 
     parser.add_argument(
         "--end",
-        default=END_DATE,
-        help="Fecha final YYYY-MM-DD"
+        default=END_DATE
     )
-
 
     parser.add_argument(
         "--bbox",
         nargs=4,
         type=float,
-        default=BOUNDING_BOX,
-        metavar=(
-            "WEST",
-            "SOUTH",
-            "EAST",
-            "NORTH"
-        )
+        default=BOUNDING_BOX
     )
-
 
     return parser.parse_args()
 
-
-
-# ============================================================
-# MAIN
-# ============================================================
 
 def main():
 
     args = parse_arguments()
 
-
     downloader = MODISDownloader()
 
+    downloader.download_dataset(
+        start_date=args.start,
+        end_date=args.end,
+        bbox=tuple(args.bbox),
+    )
 
-    try:
-
-        downloader.authenticate()
-
-
-        downloader.check_existing_downloads()
-
-
-        downloader.download_dataset(
-            start_date=args.start,
-            end_date=args.end,
-            bbox=tuple(args.bbox)
-        )
-
-
-        downloader.validate_dataset()
-
+    if downloader.validate_dataset():
 
         downloader.summary()
 
+    else:
 
-
-    except Exception as exc:
-
-        logger.exception(
-            f"Error durante descarga: {exc}"
+        raise SystemExit(
+            "Dataset validation failed"
         )
-
-        raise SystemExit(1)
-
 
 
 if __name__ == "__main__":
