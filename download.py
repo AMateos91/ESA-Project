@@ -606,3 +606,315 @@ class MODISDownloader:
             "images": image_granules,
             "fire_masks": fire_granules,
         }
+            # ========================================================
+    # CONTROL DE DESCARGAS EXISTENTES
+    # ========================================================
+
+    def existing_files(
+        self,
+        directory: Path
+    ) -> list[Path]:
+        """
+        Devuelve los archivos ya descargados.
+
+        Sirve para evitar descargar
+        datos repetidos.
+        """
+
+        if not directory.exists():
+
+            return []
+
+
+        files = [
+            f for f in directory.rglob("*")
+            if f.is_file()
+        ]
+
+
+        return files
+
+
+
+    def check_existing_downloads(
+        self
+    ) -> dict[str, int]:
+        """
+        Resume los archivos existentes.
+        """
+
+        images = self.existing_files(
+            self.image_dir
+        )
+
+        fire = self.existing_files(
+            self.fire_dir
+        )
+
+
+        summary = {
+            "images": len(images),
+            "fire": len(fire)
+        }
+
+
+        logger.info(
+            "Archivos existentes:"
+        )
+
+        logger.info(
+            f"MOD09GA: {summary['images']}"
+        )
+
+        logger.info(
+            f"MOD14A1: {summary['fire']}"
+        )
+
+
+        return summary
+
+
+
+    # ========================================================
+    # DESCARGA CON REINTENTOS
+    # ========================================================
+
+    def download_with_retry(
+        self,
+        granules,
+        destination: Path,
+        retries: int = 3,
+    ):
+        """
+        Descarga con reintentos.
+
+        Evita fallos temporales de red.
+        """
+
+
+        last_error = None
+
+
+        for attempt in range(1, retries + 1):
+
+            logger.info(
+                f"Intento {attempt}/{retries}"
+            )
+
+
+            try:
+
+                self.download_granules(
+                    granules,
+                    destination
+                )
+
+
+                logger.info(
+                    "Descarga correcta"
+                )
+
+
+                return
+
+
+            except Exception as exc:
+
+                last_error = exc
+
+
+                logger.warning(
+                    f"Fallo intento {attempt}: {exc}"
+                )
+
+
+        raise MODISDownloadError(
+            "La descarga falló después de "
+            f"{retries} intentos: {last_error}"
+        )
+
+
+
+    # ========================================================
+    # VALIDACIÓN DEL DATASET
+    # ========================================================
+
+    def validate_dataset(
+        self
+    ) -> bool:
+        """
+        Comprueba que existe información
+        descargada de ambos productos.
+        """
+
+
+        images = self.existing_files(
+            self.image_dir
+        )
+
+        masks = self.existing_files(
+            self.fire_dir
+        )
+
+
+        valid = (
+            len(images) > 0
+            and
+            len(masks) > 0
+        )
+
+
+        if valid:
+
+            logger.info(
+                "Dataset MODIS válido"
+            )
+
+        else:
+
+            logger.error(
+                "Dataset incompleto"
+            )
+
+
+        return valid
+
+
+
+    # ========================================================
+    # RESUMEN FINAL
+    # ========================================================
+
+    def summary(
+        self
+    ):
+        """
+        Muestra el estado final.
+        """
+
+
+        images = self.existing_files(
+            self.image_dir
+        )
+
+        fire = self.existing_files(
+            self.fire_dir
+        )
+
+
+        print("\n")
+        print("=" * 60)
+        print(" RESUMEN DATASET MODIS ")
+        print("=" * 60)
+
+        print(
+            f"Imágenes MOD09GA : {len(images)}"
+        )
+
+        print(
+            f"Máscaras MOD14A1 : {len(fire)}"
+        )
+
+        print(
+            f"Directorio datos : {self.output_dir}"
+        )
+
+        print("=" * 60)
+        print("\n")
+
+
+
+# ============================================================
+# INTERFAZ DE COMANDO
+# ============================================================
+
+def parse_arguments():
+
+    import argparse
+
+
+    parser = argparse.ArgumentParser(
+        description=
+        "Descarga productos MODIS para detección de incendios"
+    )
+
+
+    parser.add_argument(
+        "--start",
+        default=START_DATE,
+        help="Fecha inicial YYYY-MM-DD"
+    )
+
+
+    parser.add_argument(
+        "--end",
+        default=END_DATE,
+        help="Fecha final YYYY-MM-DD"
+    )
+
+
+    parser.add_argument(
+        "--bbox",
+        nargs=4,
+        type=float,
+        default=BOUNDING_BOX,
+        metavar=(
+            "WEST",
+            "SOUTH",
+            "EAST",
+            "NORTH"
+        )
+    )
+
+
+    return parser.parse_args()
+
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    args = parse_arguments()
+
+
+    downloader = MODISDownloader()
+
+
+    try:
+
+        downloader.authenticate()
+
+
+        downloader.check_existing_downloads()
+
+
+        downloader.download_dataset(
+            start_date=args.start,
+            end_date=args.end,
+            bbox=tuple(args.bbox)
+        )
+
+
+        downloader.validate_dataset()
+
+
+        downloader.summary()
+
+
+
+    except Exception as exc:
+
+        logger.exception(
+            f"Error durante descarga: {exc}"
+        )
+
+        raise SystemExit(1)
+
+
+
+if __name__ == "__main__":
+
+    main()
