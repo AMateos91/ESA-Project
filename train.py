@@ -303,7 +303,7 @@ def main():
 
 
     model = FireUNet(
-        in_channels=7,
+        in_channels=11,
         out_channels=1
     )
 
